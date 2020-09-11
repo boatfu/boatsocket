@@ -1,29 +1,31 @@
 const http = require('http');
-const net = require('net');
 const url = require('url');
-// const crypto = require("crypto");
+const crypto = require('crypto');
+const Websocket = require('ws');
+function handleError(e) {
+    console.error(e);
+}
 function connect(request, cSock) {
     console.log('hello connect');
     const u = url.parse('http://' + request.url);
-    const sSock = net.connect(u.port, u.hostname, () => {
+    const ws = new Websocket('ws://localhost:9999');
+    ws.on('open', () => {
+        console.log('open!')
         cSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        sSock.pipe(cSock);
+        ws.send(u.port + '-' + u.hostname);
     });
-    sSock.on('error', (e) => {
-        console.error(e);
-        cSock.end();
+    ws.on('message', (message) => {
+        console.log('will send back data', message);
+        cSock.write(message);
     });
-    cSock.pipe(sSock);
+    ws.on('error', handleError);
+    cSock.on('data', (data) => {
+        console.log('will send data', data);
+        ws.send(data);
+    });
+    cSock.on('error', handleError);
 }
-function request(request, response) {
-    response.write('hello response');
-    response.end();
-}
-
 const client = http.createServer();
 client.on('connect', connect);
-client.on('request', request);
-client.on('error', (e) => {
-    console.error(e);
-});
+client.on('error', handleError);
 client.listen('8888', '0.0.0.0');
