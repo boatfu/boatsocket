@@ -1,29 +1,80 @@
-const http = require('http');
 const net = require('net');
 const url = require('url');
-// const crypto = require("crypto");
-function connect(request, cSock) {
-    console.log('hello connect');
-    const u = url.parse('http://' + request.url);
-    const sSock = net.connect(u.port, u.hostname, () => {
-        cSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        sSock.pipe(cSock);
-    });
-    sSock.on('error', (e) => {
-        console.error(e);
-        cSock.end();
-    });
-    cSock.pipe(sSock);
-}
-function request(request, response) {
-    response.write('hello response');
-    response.end();
+const Websocket = require('ws');
+const fs = require('fs');
+const path = require('path');
+const { config } = require('process');
+
+function handleError(str, callback) {
+    return function (e) {
+        callback && callback();
+        console.error(str, e);
+    }
 }
 
-const client = http.createServer();
-client.on('connect', connect);
-client.on('request', request);
-client.on('error', (e) => {
-    console.error(e);
-});
-client.listen('8888', '0.0.0.0');
+function handShake(config, data) {
+    const cSock = this;
+    const HOSTReg = /Host: (.*?)\r\n/;
+    const CONNECTReg = /^CONNECT (.*?) HTTP/;
+    let u;
+    try {
+        u = url.parse('http://' + data.toString().match(HOSTReg)[1]);
+    } catch(e) {
+        console.error(e);
+        cSock.destroy();
+        return;
+    }
+    const ws = new Websocket('wss://' + config.serverIP + ':' + config.serverPort);
+
+    if (CONNECTReg.test(data.toString())) {
+        ws.on('open', () => {
+            cSock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+            ws.send((u.port || 80) + '&' + u.hostname + '&' + config.password);
+            ws.on('message', (data) => {
+                cSock.write(data);
+            });
+        });
+    } else {
+        ws.on('open', () => {
+            ws.send((u.port || 80) + '&' + u.hostname + '&' + config.password);
+            ws.send(data);
+            ws.on('message', (data) => {
+                cSock.write(data);
+            });
+        });
+    }
+    cSock.on('data', handleProxy.bind(ws));
+    ws.on('error', handleError('ws error', () => {
+        ws.close();
+    }));
+}
+
+function handleProxy(data) {
+    const ws = this;
+    ws.send(data);
+}
+
+
+
+function main() {
+    process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = 0;
+    let config;
+    try {
+        config = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../config/config.json')).toString());;
+    } catch(e) {
+        console.error(e);
+        return;
+    }
+    let {clientPort} = config;
+
+    const server = net.createServer((cSock) => {
+        cSock.once('data', handShake.bind(cSock, config));
+        cSock.on('error', handleError('cSock error', () => {
+            cSock.destroy();
+        }));
+    });
+    
+    server.listen(clientPort, '0.0.0.0');
+}
+
+main();
